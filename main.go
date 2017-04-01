@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -14,9 +15,7 @@ import (
 func main() {
 	fmt.Println("Start server")
 	server := mux.NewRouter().StrictSlash(true)
-	server.Headers("Content-Type", "application/json",
-		"Ocp-Apim-Subscription-Key", "9122668a88454ac9bed0b816edbe5c8c",
-		"Accept", "application/json")
+	server.Headers("Content-Type", "application/json")
 	server.HandleFunc("/help", HelpRoute).Methods("GET")
 	server.HandleFunc("/", Index).Methods("GET")
 	server.HandleFunc("/hello/{name}", Hello)
@@ -86,7 +85,10 @@ func Dev(w http.ResponseWriter, req *http.Request) {
 		//json package for microsoft cog labs
 		microsoftJson := parseCommentsForMicrosoft(comments)
 
-		fmt.Println(string(microsoftJson))
+		//call sentiment analysis
+		microsoftSentiment(microsoftJson)
+
+		// fmt.Println(string(microsoftJson))
 
 	}
 }
@@ -129,6 +131,27 @@ func parseCommentsForMicrosoft(comments []string) []byte {
 		return nil
 	}
 	return j
+}
+
+func microsoftSentiment(json []byte) {
+	//
+	// )
+	url := "https://westus.api.cognitive.microsoft.com/text/analytics/v2.0/sentiment"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(json))
+	req.Header.Set("Ocp-Apim-Subscription-Key", "9122668a88454ac9bed0b816edbe5c8c")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := ioutil.ReadAll(resp.Body)
+	fmt.Println("response body", string(body))
 }
 
 func httpGet(url string) (*http.Response, error) {
