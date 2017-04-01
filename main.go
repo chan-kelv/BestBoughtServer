@@ -12,6 +12,10 @@ import (
 	"github.com/gorilla/mux"
 )
 
+var (
+	MICROSOFT_COG_KEY = "9122668a88454ac9bed0b816edbe5c8c"
+)
+
 func main() {
 	fmt.Println("Start server")
 	server := mux.NewRouter().StrictSlash(true)
@@ -87,7 +91,7 @@ func Dev(w http.ResponseWriter, req *http.Request) {
 
 		//call sentiment analysis
 		microsoftSentiment(microsoftJson, nlpComment)
-		// microsoftKey(microsoftJson)
+		microsoftKeyWords(microsoftJson, nlpComment)
 
 		fmt.Println(nlpComment)
 
@@ -110,9 +114,7 @@ func getCommentsFromResp(respBodyBytes []byte) []string {
 			if k2 == "comment" {
 				comments = append(comments, v2.(string))
 			}
-			// fmt.Println(k2, ":=:", v2)
 		}
-		// fmt.Println("\n\n")
 	}
 	return comments
 }
@@ -139,11 +141,9 @@ func parseCommentsForMicrosoft(comments []string) ([]byte, map[string]NlpComment
 }
 
 func microsoftSentiment(jsonByte []byte, nlpComm map[string]NlpComment) {
-	//
-	// )
 	url := "https://westus.api.cognitive.microsoft.com/text/analytics/v2.0/sentiment"
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonByte))
-	req.Header.Set("Ocp-Apim-Subscription-Key", "9122668a88454ac9bed0b816edbe5c8c")
+	req.Header.Set("Ocp-Apim-Subscription-Key", MICROSOFT_COG_KEY)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
@@ -155,16 +155,15 @@ func microsoftSentiment(jsonByte []byte, nlpComm map[string]NlpComment) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := ioutil.ReadAll(resp.Body)
-	// fmt.Println("response body", string(body))
+	body, _ := ioutil.ReadAll(resp.Body) //[]byte of response
+
 	var sentResp SentimentResponse
-	// var sentResp []interface{}
 	err = json.Unmarshal(body, &sentResp)
 	if err != nil {
 		fmt.Println("JSON unmarshall error:", err)
 		return
 	}
-	// fmt.Println("Sent response", sentResp.Documents)
+
 	for _, sent := range sentResp.Documents {
 		s := nlpComm[sent.Id]
 		s.SentimentScore = sent.Score
@@ -172,11 +171,10 @@ func microsoftSentiment(jsonByte []byte, nlpComm map[string]NlpComment) {
 	}
 }
 
-func microsoftKey(json []byte) {
-
+func microsoftKeyWords(jsonByte []byte, nlpComm map[string]NlpComment) {
 	url := "https://westus.api.cognitive.microsoft.com/text/analytics/v2.0/keyPhrases"
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(json))
-	req.Header.Set("Ocp-Apim-Subscription-Key", "9122668a88454ac9bed0b816edbe5c8c")
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonByte))
+	req.Header.Set("Ocp-Apim-Subscription-Key", MICROSOFT_COG_KEY)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
@@ -188,11 +186,24 @@ func microsoftKey(json []byte) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := ioutil.ReadAll(resp.Body)
+	body, _ := ioutil.ReadAll(resp.Body) //resp body as []byte
 	// var x map[string]interface{}
 	// json.Unmarshal(byte[](body), &x)
 	// fmt.Println("\n\n")
-	fmt.Println("keywords", string(body))
+	var keyResp KeywordResponse
+	err = json.Unmarshal(body, &keyResp)
+	if err != nil {
+		fmt.Println("JSON unmarshall error:", err)
+		return
+	}
+	for _, phrases := range keyResp.Documents {
+		// s := nlpComm[sent.Id]
+		// s.SentimentScore = sent.Score
+		// nlpComm[sent.Id] = s
+		k := nlpComm[phrases.Id]
+		k.KeyPhrases = phrases.KeyPhrases
+		nlpComm[phrases.Id] = k
+	}
 }
 
 func httpGet(url string) (*http.Response, error) {
@@ -224,7 +235,18 @@ type SentimentResponse struct {
 	Errors    []string    `json:"errors"`
 }
 
+type KeywordResponse struct {
+	Documents []KeyPhrase `json:"documents"`
+	Errors    []string    `json:"errors"`
+}
+
+type KeyPhrase struct {
+	KeyPhrases []string `json:"keyPhrases"`
+	Id         string   `json:"id"`
+}
+
 type NlpComment struct {
 	CommentText    string
 	SentimentScore float64
+	KeyPhrases     []string
 }
