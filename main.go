@@ -14,7 +14,9 @@ import (
 func main() {
 	fmt.Println("Start server")
 	server := mux.NewRouter().StrictSlash(true)
-	server.Headers("Content-Type", "application/json")
+	server.Headers("Content-Type", "application/json",
+		"Ocp-Apim-Subscription-Key", "9122668a88454ac9bed0b816edbe5c8c",
+		"Accept", "application/json")
 	server.HandleFunc("/help", HelpRoute).Methods("GET")
 	server.HandleFunc("/", Index).Methods("GET")
 	server.HandleFunc("/hello/{name}", Hello)
@@ -23,6 +25,8 @@ func main() {
 	// http.Handle("/", server)
 	log.Fatal(http.ListenAndServe(":8080", server))
 }
+
+//================Routes============
 
 func Index(w http.ResponseWriter, req *http.Request) {
 	fmt.Println("Hello there")
@@ -79,12 +83,15 @@ func Dev(w http.ResponseWriter, req *http.Request) {
 		//get the comments as []string
 		comments := getCommentsFromResp(respBodyBytes)
 
-		fmt.Println(comments)
+		//json package for microsoft cog labs
+		microsoftJson := parseCommentsForMicrosoft(comments)
 
-		// fmt.Fprintf(w, dat)
+		fmt.Println(string(microsoftJson))
+
 	}
-
 }
+
+//=============Helpers==================
 
 func getCommentsFromResp(respBodyBytes []byte) []string {
 	var dat map[string]interface{}
@@ -107,10 +114,38 @@ func getCommentsFromResp(respBodyBytes []byte) []string {
 	return comments
 }
 
+func parseCommentsForMicrosoft(comments []string) []byte {
+	//TODO: stop if ID>100
+	idCount := 1
+	var d Document
+	for _, comment := range comments {
+		commElement := DocElement{Language: "en", Id: strconv.Itoa(idCount), Text: comment}
+		d.Documents = append(d.Documents, commElement)
+		idCount++
+	}
+	j, err := json.Marshal(d)
+	if err != nil {
+		fmt.Println("json marshal error", err)
+		return nil
+	}
+	return j
+}
+
 func httpGet(url string) (*http.Response, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("GET error", err)
 	}
 	return resp, nil
+}
+
+//=============Structs================
+type DocElement struct {
+	Language string `json:"language"`
+	Id       string `json:"id"`
+	Text     string `json:"text"`
+}
+
+type Document struct {
+	Documents []DocElement `json:"documents"`
 }
