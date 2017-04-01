@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -63,18 +64,14 @@ func HelpRoute(w http.ResponseWriter, req *http.Request) {
 func CommentNLP(w http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
 	prodIdRaw := vars["prodId"]
-	prodId, err := strconv.Atoi(prodIdRaw)
-	if err != nil {
-		fmt.Println("Product num", prodIdRaw, "error:", err)
-		fmt.Fprintf(w, "Could not read product", prodIdRaw)
-		return
-	}
-	fmt.Println("Product received", prodId)
-	fmt.Fprintf(w, "Product received %s", prodIdRaw)
-}
+	// prodId, err := strconv.Atoi(prodIdRaw)
+	// if err != nil {
+	// 	fmt.Println("Product num", prodIdRaw, "error:", err)
+	// 	fmt.Fprintf(w, "Could not read product", prodIdRaw)
+	// 	return
+	// }
 
-func Dev(w http.ResponseWriter, req *http.Request) {
-	resp, err := httpGet("http://www.bestbuy.ca/api/v2/json/reviews/10415309?page=1&pagesize=20&source=us")
+	resp, err := httpGet("http://www.bestbuy.ca/api/v2/json/reviews/" + prodIdRaw + "?page=1&pagesize=20&source=us")
 	if err != nil {
 		fmt.Println("GET error:", err)
 		return
@@ -85,10 +82,10 @@ func Dev(w http.ResponseWriter, req *http.Request) {
 		respBodyBytes, _ := ioutil.ReadAll(resp.Body)
 
 		//get the comments as []string
-		comments := getCommentsFromResp(respBodyBytes)
+		commStruct := getCommentsFromResp(respBodyBytes) //commStruct
 
 		//json package for microsoft cog labs
-		microsoftJson, nlpCommentMap := parseCommentsForMicrosoft(comments)
+		microsoftJson, nlpCommentMap := parseCommentsForMicrosoft(commStruct)
 
 		//call sentiment analysis
 		microsoftSentiment(microsoftJson, nlpCommentMap)
@@ -96,42 +93,86 @@ func Dev(w http.ResponseWriter, req *http.Request) {
 
 		//nlp comment is now ready to parse for key words
 		batteryWordCount(nlpCommentMap)
+		//TODO add more attributes
 
-		fmt.Println(nlpCommentMap)
+		ranked := prodRanked(nlpCommentMap) //prod will have rankscores
+
+		rankComments(ranked)
+
+		final, err := json.Marshal(ranked)
+		if err != nil {
+			fmt.Println("error:", err)
+		}
+		fmt.Fprintf(w, string(final))
+		// fmt.Println(ranked)
 	}
 }
 
-//=============Helpers==================
+func Dev(w http.ResponseWriter, req *http.Request) {
+	// resp, err := httpGet("http://www.bestbuy.ca/api/v2/json/reviews/10415309?page=1&pagesize=20&source=us")
+	// if err != nil {
+	// 	fmt.Println("GET error:", err)
+	// 	return
+	// }
+	// //all good in the hood
+	// if resp.StatusCode >= 200 && resp.StatusCode <= 300 {
+	// 	//get the json response body as []byte
+	// 	respBodyBytes, _ := ioutil.ReadAll(resp.Body)
+	//
+	// 	//get the comments as []string
+	// 	comments := getCommentsFromResp(respBodyBytes)
+	//
+	// 	//json package for microsoft cog labs
+	// 	microsoftJson, nlpCommentMap := parseCommentsForMicrosoft(comments)
+	//
+	// 	//call sentiment analysis
+	// 	microsoftSentiment(microsoftJson, nlpCommentMap)
+	// 	microsoftKeyWords(microsoftJson, nlpCommentMap)
+	//
+	// 	//nlp comment is now ready to parse for key words
+	// 	batteryWordCount(nlpCommentMap)
+	//
+	// 	fmt.Println(nlpCommentMap)
+	// }
+}
 
-func getCommentsFromResp(respBodyBytes []byte) []string {
+//=============Helpers==================
+type CommStruct struct {
+	Comments []string
+	Rating   float64
+}
+
+func getCommentsFromResp(respBodyBytes []byte) CommStruct {
 	var dat map[string]interface{}
 	if err := json.Unmarshal(respBodyBytes, &dat); err != nil {
 		panic(err)
-		return nil
 	}
 
-	var comments []string
+	var commStruct CommStruct
 	for _, val := range dat["reviews"].([]interface{}) {
 		v := val.(map[string]interface{})
 		for k2, v2 := range v {
 			if k2 == "comment" {
-				comments = append(comments, v2.(string))
+				commStruct.Comments = append(commStruct.Comments, v2.(string))
+			}
+			if k2 == "rating" {
+				commStruct.Rating = v2.(float64)
 			}
 		}
 	}
-	return comments
+	return commStruct
 }
 
-func parseCommentsForMicrosoft(comments []string) ([]byte, map[string]NlpComment) {
+func parseCommentsForMicrosoft(comments CommStruct) ([]byte, map[string]NlpComment) {
 	//TODO: stop if ID>100
 	idCount := 1
 	commentMap := make(map[string]NlpComment)
 	var d Document
-	for _, comment := range comments {
+	for _, comment := range comments.Comments {
 		commElement := DocElement{Language: "en", Id: strconv.Itoa(idCount), Text: comment}
 		d.Documents = append(d.Documents, commElement)
 
-		commentMap[strconv.Itoa(idCount)] = NlpComment{CommentText: comment}
+		commentMap[strconv.Itoa(idCount)] = NlpComment{CommentText: comment, ReviewScore: comments.Rating}
 
 		idCount++
 	}
@@ -239,6 +280,56 @@ func batteryWordCount(nlpComm map[string]NlpComment) {
 	}
 }
 
+func prodRanked(prodMap map[string]NlpComment) []NlpComment {
+	prodRankMap := make(map[float64]NlpComment) //rankScore:comment HACK - assume unique
+	var scoreList []float64
+	for _, comm := range prodMap {
+		var rankScore float64 = 0
+		if containProCon(comm.KeyPhrases) {
+			rankScore = rankScore + 10
+		}
+
+		if comm.GoodBattery != 0 {
+			rankScore = rankScore + 1
+		} else if comm.BadBattery != 0 {
+			rankScore = rankScore + 1
+		}
+
+		rankScore = rankScore + (comm.SentimentScore * 10)
+
+		comm.NlpRank = rankScore
+		prodRankMap[rankScore] = comm
+		scoreList = append(scoreList, rankScore)
+	}
+
+	sort.Float64s(scoreList)
+	var rankedList []NlpComment
+	for i := len(scoreList) - 1; i >= 0; i-- {
+		rankedList = append(rankedList, prodRankMap[scoreList[i]])
+	}
+	return rankedList
+}
+
+func rankComments(comments []NlpComment) {
+	for _, c := range comments {
+		if c.ReviewScore >= 4 {
+			c.GoodComments = append(c.GoodComments, c.CommentText)
+		} else {
+			c.BadComments = append(c.BadComments, c.CommentText)
+		}
+	}
+}
+
+func containProCon(phrases []string) bool {
+	for _, p := range phrases {
+		if strings.Contains(p, "pro") || strings.Contains(p, "pros") ||
+			strings.Contains(p, "con") || strings.Contains(p, "cons") {
+			return true
+		}
+	}
+	return false
+}
+
 //=============Structs================
 type DocElement struct {
 	Language string `json:"language"`
@@ -272,8 +363,12 @@ type KeyPhrase struct {
 
 type NlpComment struct {
 	CommentText    string
+	GoodComments   []string
+	BadComments    []string
 	SentimentScore float64
 	KeyPhrases     []string
 	GoodBattery    int
 	BadBattery     int
+	NlpRank        float64
+	ReviewScore    float64
 }
