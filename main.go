@@ -14,6 +14,8 @@ import (
 func main() {
 	fmt.Println("Start server")
 	server := mux.NewRouter().StrictSlash(true)
+	server.Headers("Content-Type", "application/json")
+	server.HandleFunc("/help", HelpRoute).Methods("GET")
 	server.HandleFunc("/", Index).Methods("GET")
 	server.HandleFunc("/hello/{name}", Hello)
 	server.HandleFunc("/product/{prodId}", CommentNLP).Methods("GET")
@@ -35,8 +37,19 @@ func Hello(w http.ResponseWriter, req *http.Request) {
 }
 
 func HelpRoute(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("Help Path")
-	fmt.Fprintf(w, "Help please!")
+	w.Header().Add("Access-Control-Allow-Origin", "*")
+	resp, err := httpGet("http://www.bestbuy.ca/api/v2/json/reviews/10415309?page=1&pagesize=20&source=us")
+	if err != nil {
+		fmt.Println("GET error:", err)
+		return
+	}
+	//all good in the hood
+	if resp.StatusCode >= 200 && resp.StatusCode <= 300 {
+		//get the json response body as []byte
+		respBodyBytes, _ := ioutil.ReadAll(resp.Body)
+		fmt.Fprintf(w, string(respBodyBytes))
+		return
+	}
 }
 
 func CommentNLP(w http.ResponseWriter, req *http.Request) {
@@ -60,29 +73,38 @@ func Dev(w http.ResponseWriter, req *http.Request) {
 	}
 	//all good in the hood
 	if resp.StatusCode >= 200 && resp.StatusCode <= 300 {
+		//get the json response body as []byte
 		respBodyBytes, _ := ioutil.ReadAll(resp.Body)
 
-		var dat map[string]interface{}
-		if err := json.Unmarshal(respBodyBytes, &dat); err != nil {
-			panic(err)
-		}
-		var comments []string
-		for _, val := range dat["reviews"].([]interface{}) {
-			v := val.(map[string]interface{})
-			for k2, v2 := range v {
-				if k2 == "comment" {
-					comments = append(comments, v2.(string))
-				}
-				fmt.Println(k2, ":=:", v2)
-			}
-			fmt.Println("\n\n")
-		}
+		//get the comments as []string
+		comments := getCommentsFromResp(respBodyBytes)
 
 		fmt.Println(comments)
 
 		// fmt.Fprintf(w, dat)
 	}
 
+}
+
+func getCommentsFromResp(respBodyBytes []byte) []string {
+	var dat map[string]interface{}
+	if err := json.Unmarshal(respBodyBytes, &dat); err != nil {
+		panic(err)
+		return nil
+	}
+
+	var comments []string
+	for _, val := range dat["reviews"].([]interface{}) {
+		v := val.(map[string]interface{})
+		for k2, v2 := range v {
+			if k2 == "comment" {
+				comments = append(comments, v2.(string))
+			}
+			fmt.Println(k2, ":=:", v2)
+		}
+		fmt.Println("\n\n")
+	}
+	return comments
 }
 
 func httpGet(url string) (*http.Response, error) {
