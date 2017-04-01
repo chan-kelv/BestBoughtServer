@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 )
@@ -87,14 +88,16 @@ func Dev(w http.ResponseWriter, req *http.Request) {
 		comments := getCommentsFromResp(respBodyBytes)
 
 		//json package for microsoft cog labs
-		microsoftJson, nlpComment := parseCommentsForMicrosoft(comments)
+		microsoftJson, nlpCommentMap := parseCommentsForMicrosoft(comments)
 
 		//call sentiment analysis
-		microsoftSentiment(microsoftJson, nlpComment)
-		microsoftKeyWords(microsoftJson, nlpComment)
+		microsoftSentiment(microsoftJson, nlpCommentMap)
+		microsoftKeyWords(microsoftJson, nlpCommentMap)
 
-		fmt.Println(nlpComment)
+		//nlp comment is now ready to parse for key words
+		batteryWordCount(nlpCommentMap)
 
+		fmt.Println(nlpCommentMap)
 	}
 }
 
@@ -214,6 +217,28 @@ func httpGet(url string) (*http.Response, error) {
 	return resp, nil
 }
 
+func batteryWordCount(nlpComm map[string]NlpComment) {
+
+	for id, comm := range nlpComm {
+		goodBattery := 0
+		badBattery := 0
+		for _, phrase := range comm.KeyPhrases {
+			if strings.Contains(strings.ToLower(phrase), "battery") {
+				fmt.Println("Battery found!", phrase)
+				if comm.SentimentScore > 0.5 {
+					goodBattery++
+				} else {
+					badBattery++
+				}
+			}
+		}
+		temp := nlpComm[id]
+		temp.GoodBattery = goodBattery
+		temp.BadBattery = badBattery
+		nlpComm[id] = temp
+	}
+}
+
 //=============Structs================
 type DocElement struct {
 	Language string `json:"language"`
@@ -249,4 +274,6 @@ type NlpComment struct {
 	CommentText    string
 	SentimentScore float64
 	KeyPhrases     []string
+	GoodBattery    int
+	BadBattery     int
 }
