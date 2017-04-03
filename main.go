@@ -238,7 +238,8 @@ func microsoftKeyWords(jsonByte []byte, nlpComm []NlpComment) {
 //if semantics is > threshold, consider the comment +1 for good battery else badbattery
 func batteryWordCount(nlpComms []NlpComment) {
 	//for each comment
-	for _, comm := range nlpComms {
+	for i := 0; i < len(nlpComms); i++ {
+		comm := nlpComms[i]
 		goodBattery := 0
 		badBattery := 0
 		//check a comments phrases for the word battery
@@ -254,6 +255,8 @@ func batteryWordCount(nlpComms []NlpComment) {
 				}
 			}
 		}
+		nlpComms[i].GoodBattery = goodBattery
+		nlpComms[i].BadBattery = badBattery
 	}
 }
 
