@@ -25,52 +25,43 @@ func main() {
 	fmt.Println("Start server")
 	server := mux.NewRouter().StrictSlash(true)
 	server.Headers("Content-Type", "application/json")
-	server.HandleFunc("/help", HelpRoute).Methods("GET")
 	server.HandleFunc("/", Index).Methods("GET")
-	// server.HandleFunc("/hello/{name}", Hello)
-	server.HandleFunc("/product/{prodId}", CommentNLP).Methods("GET")
-	// server.HandleFunc("/dev/", Dev)
-	// http.Handle("/", server)
+	server.HandleFunc("/help", HelpRoute).Methods("GET")
+	server.HandleFunc("/product/{prodId}", CommentNLP).Methods("GET") //main use
 	log.Fatal(http.ListenAndServe(":8080", server))
 }
 
 //================Routes============
 
+//Says hello! used as test route
 func Index(w http.ResponseWriter, req *http.Request) {
 	fmt.Println("Hello there")
 	fmt.Fprintf(w, "Hello there!")
 }
 
-func Hello(w http.ResponseWriter, req *http.Request) {
-	vars := mux.Vars(req)
-	name := vars["name"]
-	fmt.Println("Name:", name)
-	fmt.Fprintf(w, "Hello %s", name)
-}
-
+//another test function
 func HelpRoute(w http.ResponseWriter, req *http.Request) {
 	w.Header().Add("Access-Control-Allow-Origin", "*")
-	resp, err := httpGet("http://www.bestbuy.ca/api/v2/json/reviews/10415309?page=1&pagesize=20&source=us")
-	if err != nil {
-		fmt.Println("GET error:", err)
-		return
-	}
-	//all good in the hood
-	if resp.StatusCode >= 200 && resp.StatusCode <= 300 {
-		//get the json response body as []byte
-		respBodyBytes, _ := ioutil.ReadAll(resp.Body)
-		fmt.Fprintf(w, string(respBodyBytes))
-		return
-	}
+	resp := "Active routes \n\n/product{BestBuyProductId}"
+	fmt.Fprintf(w, resp)
 }
 
+/*
+	Given a best buy product id, this route uses best buy api to return a list
+	of the comments for the product. Stores each comment into NlpComment and runs
+	them through Microsoft Cog systems semantic and keyword analysis.
+	The comments are assigned a score based on their cog system scores and keyword attributes
+	(self determined).
+	The comments are then ranked based on the score and returned as a json package to the user
+	TODO comments restricted to 50 for hack
+*/
 func CommentNLP(w http.ResponseWriter, req *http.Request) {
 	//get the product id from the url
 	vars := mux.Vars(req)
 	prodIdRaw := vars["prodId"]
 
 	//best buy api for product info
-	resp, err := httpGet("http://www.bestbuy.ca/api/v2/json/reviews/" + prodIdRaw + "?page=1&pagesize=20&source=us")
+	resp, err := httpGet("http://www.bestbuy.ca/api/v2/json/reviews/" + prodIdRaw + "?page=1&pagesize=50&source=us")
 	if err != nil {
 		fmt.Println("GET error:", err)
 		return
@@ -81,68 +72,52 @@ func CommentNLP(w http.ResponseWriter, req *http.Request) {
 		//get the json response body as []byte
 		respBodyBytes, _ := ioutil.ReadAll(resp.Body)
 
-		//get the comments as []string
-		commStructs := getCommentsFromResp(respBodyBytes) //commStruct
+		//get the comments as []NlpComment
+		commStructs := getCommentsFromResp(respBodyBytes)
 
-		// //json package for microsoft cog labs
+		// //json package for microsoft cog labs turns commStruct into []byte
 		microsoftJson := parseCommentsForMicrosoft(commStructs)
-		//
+
+		/*
+			Library parsing TODO add more libraies
+		*/
 		// //call sentiment analysis
 		microsoftSentiment(microsoftJson, commStructs)
 		//call keyword analysis
 		microsoftKeyWords(microsoftJson, commStructs)
-		//
+
+		/*
+			Analyze key words here TODO add more attributes
+		*/
 		// nlp comment is now ready to parse for key words
 		batteryWordCount(commStructs)
-		// //TODO add more attributes
-		//
-		prodRanked(commStructs) //prod will have rankscores
+
+		//Give the comments a final score based on attributes and semantics
+		prodRanked(commStructs)
 
 		//rank the comm structs with the new nlp score
 		sort.Slice(commStructs, func(i int, j int) bool {
-			return commStructs[i].NlpRankScore > commStructs[j].NlpRankScore //from highest to lowers
+			return commStructs[i].NlpRankScore > commStructs[j].NlpRankScore //from highest to lowest
 		})
 
+		//create nlpProd for this best buy item
 		nlpProduct := NlpProduct{Comments: commStructs}
+
+		//Sort the comments based on initial customer rating
 		goodComm, badComm := sortComments(nlpProduct)
 		nlpProduct.GoodComments = goodComm
 		nlpProduct.BadComments = badComm
 
+		//encode the final nlp product for return
 		final, err := json.Marshal(nlpProduct)
 		if err != nil {
 			fmt.Println("final marshall error:", err)
 		}
+
+		//return as text to client
 		fmt.Fprintf(w, string(final))
 		fmt.Println("Product retrieved:", prodIdRaw)
 	}
-}
-
-func Dev(w http.ResponseWriter, req *http.Request) {
-	// resp, err := httpGet("http://www.bestbuy.ca/api/v2/json/reviews/10415309?page=1&pagesize=20&source=us")
-	// if err != nil {
-	// 	fmt.Println("GET error:", err)
-	// 	return
-	// }
-	// //all good in the hood
-	// if resp.StatusCode >= 200 && resp.StatusCode <= 300 {
-	// 	//get the json response body as []byte
-	// 	respBodyBytes, _ := ioutil.ReadAll(resp.Body)
-	//
-	// 	//get the comments as []string
-	// 	comments := getCommentsFromResp(respBodyBytes)
-	//
-	// 	//json package for microsoft cog labs
-	// 	microsoftJson, nlpCommentMap := parseCommentsForMicrosoft(comments)
-	//
-	// 	//call sentiment analysis
-	// 	microsoftSentiment(microsoftJson, nlpCommentMap)
-	// 	microsoftKeyWords(microsoftJson, nlpCommentMap)
-	//
-	// 	//nlp comment is now ready to parse for key words
-	// 	batteryWordCount(nlpCommentMap)
-	//
-	// 	fmt.Println(nlpCommentMap)
-	// }
 }
 
 //=============Helpers==================
@@ -156,11 +131,13 @@ func httpGet(url string) (*http.Response, error) {
 
 //From best buy comment response, return a list of comments with features we want in []NlpComment
 func getCommentsFromResp(respBodyBytes []byte) []NlpComment {
+	//deserialize back into BestBuyProd
 	var bbData BestBuyProd
 	if err := json.Unmarshal(respBodyBytes, &bbData); err != nil {
 		panic(err)
 	}
 
+	//add relavent fields into nlp comments (comment text, rating)
 	var nlpComms []NlpComment
 	for _, comment := range bbData.Reviews {
 		nlpComm := NlpComment{CustomerComment: comment.Comment, CustomerRating: comment.Rating}
@@ -170,21 +147,19 @@ func getCommentsFromResp(respBodyBytes []byte) []NlpComment {
 	return nlpComms
 }
 
-//for microsoft semantics, they need a []byte for each comment
+//Turn comments into []byte for microsoft to process
 func parseCommentsForMicrosoft(comments []NlpComment) []byte {
-	//TODO: stop if ID>100
-	idCount := 1
-	// commentMap := make(map[string]NlpComment)
+	idCount := 1 //microsoft needs an id to start at 1 for api
+
 	//put all comments into document to be processed as json arr
 	var d Document
 	for _, comm := range comments {
 		commElement := DocElement{Language: "en", Id: strconv.Itoa(idCount), Text: comm.CustomerComment}
 		d.Documents = append(d.Documents, commElement)
-
-		// commentMap[strconv.Itoa(idCount)] = NlpComment{CommentText: comment, ReviewScore: comments.Rating}
 		idCount++
 	}
 
+	//serialize into []byte
 	j, err := json.Marshal(d)
 	if err != nil {
 		fmt.Println("json marshal error", err)
@@ -193,6 +168,8 @@ func parseCommentsForMicrosoft(comments []NlpComment) []byte {
 	return j
 }
 
+//send comments to microsoft semantics to give each a score
+//TODO can only take 100 in a package
 func microsoftSentiment(jsonByte []byte, nlpComm []NlpComment) {
 	url := "https://westus.api.cognitive.microsoft.com/text/analytics/v2.0/sentiment"
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonByte))
@@ -218,12 +195,14 @@ func microsoftSentiment(jsonByte []byte, nlpComm []NlpComment) {
 		return
 	}
 
-	//for each sentimate store, add it to the comments
+	//for each sentimate store, add it to the nlpcomment
 	for i := 0; i < len(nlpComm); i++ {
 		nlpComm[i].SentimentScore = sentResp.Documents[i].Score
 	}
 }
 
+//Give comments to microsoft api to id key words in each comment
+//TODO can only take 100 in a package
 func microsoftKeyWords(jsonByte []byte, nlpComm []NlpComment) {
 	//TODO stop at id > 100
 	url := "https://westus.api.cognitive.microsoft.com/text/analytics/v2.0/keyPhrases"
@@ -241,9 +220,7 @@ func microsoftKeyWords(jsonByte []byte, nlpComm []NlpComment) {
 	defer resp.Body.Close()
 
 	body, _ := ioutil.ReadAll(resp.Body) //resp body as []byte
-	// var x map[string]interface{}
-	// json.Unmarshal(byte[](body), &x)
-	// fmt.Println("\n\n")
+
 	var keyResp KeywordResponse
 	err = json.Unmarshal(body, &keyResp)
 	if err != nil {
@@ -251,19 +228,14 @@ func microsoftKeyWords(jsonByte []byte, nlpComm []NlpComment) {
 		return
 	}
 
+	//add key words to nlpcomment
 	for i := 0; i < len(nlpComm); i++ {
 		nlpComm[i].KeyPhrases = keyResp.Documents[i].KeyPhrases
 	}
-	// for _, phrases := range keyResp.Documents {
-	// 	// s := nlpComm[sent.Id]
-	// 	// s.SentimentScore = sent.Score
-	// 	// nlpComm[sent.Id] = s
-	// 	k := nlpComm[phrases.Id]
-	// 	k.KeyPhrases = phrases.KeyPhrases
-	// 	nlpComm[phrases.Id] = k
-	// }
 }
 
+//determins if the keywords contains an attribute word:battery
+//if semantics is > threshold, consider the comment +1 for good battery else badbattery
 func batteryWordCount(nlpComms []NlpComment) {
 	//for each comment
 	for _, comm := range nlpComms {
@@ -285,7 +257,13 @@ func batteryWordCount(nlpComms []NlpComment) {
 	}
 }
 
-//
+/* Gives the comments a final nlp score to find most relavent comments
+ Algorithm so far is:
+	Score = KEY Attributes * 10  +
+					MINOR Attributes * 1 +
+					Semantic Score * 10
+*/
+
 func prodRanked(nlpComms []NlpComment) {
 	for i := 0; i < len(nlpComms); i++ {
 		var score float64
@@ -303,66 +281,12 @@ func prodRanked(nlpComms []NlpComment) {
 
 		nlpComms[i].NlpRankScore = score
 	}
-	// for _, comm := range nlpComms {
-	// 	var score float64
-	// 	//These are key attributes and are weighted more
-	// 	if containProCon(comm.KeyPhrases) {
-	// 		score += KEY_ATTR_WEIGHT
-	// 	}
-	//
-	// 	//Other attributes get lower score
-	// 	if comm.GoodBattery != 0 || comm.BadBattery != 0 {
-	// 		score += MINOR_ATTR_WEIGHT
-	// 	}
-	//
-	// 	score += comm.SentimentScore * 10
-	// 	//the final computed score
-	// 	comm.NlpRankScore = score
-	// 	fmt.Println(comm.NlpRankScore)
-	// }
-
-	// prodRankMap := make(map[float64]NlpComment) //rankScore:comment HACK - assume unique
-	// var scoreList []float64
-	// for _, comm := range prodMap {
-	// 	var rankScore float64 = 0
-	// 	if containProCon(comm.KeyPhrases) {
-	// 		rankScore = rankScore + 10
-	// 	}
-	//
-	// 	if comm.GoodBattery != 0 {
-	// 		rankScore = rankScore + 1
-	// 	} else if comm.BadBattery != 0 {
-	// 		rankScore = rankScore + 1
-	// 	}
-	//
-	// 	rankScore = rankScore + (comm.SentimentScore * 10)
-	//
-	// 	comm.NlpRank = rankScore
-	// 	prodRankMap[rankScore] = comm
-	// 	scoreList = append(scoreList, rankScore)
-	// }
-	//
-	// sort.Float64s(scoreList)
-	// var rankedList []NlpComment
-	// for i := len(scoreList) - 1; i >= 0; i-- {
-	// 	rankedList = append(rankedList, prodRankMap[scoreList[i]])
-	// }
-	// return rankedList
 }
 
-//
-// func rankComments(comments []NlpComment) {
-// 	for _, c := range comments {
-// 		if c.ReviewScore >= 4 {
-// 			c.GoodComments = append(c.GoodComments, c.CommentText)
-// 		} else {
-// 			c.BadComments = append(c.BadComments, c.CommentText)
-// 		}
-// 	}
-// }
-//
+//KEY ATTRIBUTE: if a comment has "pro" "con" list
 func containProCon(phrases []string) bool {
-	for _, p := range phrases {
+	for _, phrase := range phrases {
+		p := strings.ToLower(phrase)
 		if strings.Contains(p, "pro") || strings.Contains(p, "pros") ||
 			strings.Contains(p, "con") || strings.Contains(p, "cons") {
 			return true
@@ -371,6 +295,13 @@ func containProCon(phrases []string) bool {
 	return false
 }
 
+/*
+	prod is assumed to have sorted comments at this point
+	This method takes the comments and looks at each of the comments inital best buy
+	customer rating. If the customer rating is > 4.0 it is considered a good comment
+	(used in the display comments section). This ensures that the two lists of good
+	and bad comments show only the most high scored nlp comments first as we deem them most useful
+*/
 func sortComments(prod NlpProduct) ([]string, []string) {
 	var goodComments []string
 	var badComments []string
